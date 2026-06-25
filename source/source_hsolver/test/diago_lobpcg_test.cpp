@@ -73,6 +73,34 @@ static int lapackGeneralizedEigen(int npw,
     return info;
 }
 
+static int lapackGeneralizedEigenFloat(int npw,
+                                       std::vector<std::complex<float>>& hm,
+                                       std::vector<std::complex<float>>& sm,
+                                       float* e)
+{
+    int info = 0;
+    int itype = 1;
+    char jobz = 'N', uplo = 'U';
+    int lwork = -1, lrwork = -1, liwork = -1;
+    std::complex<float> work_query = {0.0f, 0.0f};
+    float rwork_query = 0.0f;
+    int iwork_query = 0;
+    chegvd_(&itype, &jobz, &uplo, &npw, hm.data(), &npw, sm.data(), &npw, e,
+            &work_query, &lwork, &rwork_query, &lrwork, &iwork_query, &liwork, &info);
+    if (info != 0)
+        return info;
+
+    lwork = std::max(1, static_cast<int>(std::real(work_query)));
+    lrwork = std::max(1, static_cast<int>(rwork_query));
+    liwork = std::max(1, iwork_query);
+    std::vector<std::complex<float>> work(lwork);
+    std::vector<float> rwork(lrwork);
+    std::vector<int> iwork(liwork);
+    chegvd_(&itype, &jobz, &uplo, &npw, hm.data(), &npw, sm.data(), &npw, e,
+            work.data(), &lwork, rwork.data(), &lrwork, iwork.data(), &liwork, &info);
+    return info;
+}
+
 class DiagoLobpcgTest : public ::testing::Test
 {
   protected:
@@ -417,6 +445,63 @@ class DiagoLobpcgTest : public ::testing::Test
 #endif
 };
 
+class DiagoLobpcgFloatTest : public ::testing::Test
+{
+  protected:
+    using FloatT = std::complex<float>;
+    using FloatReal = float;
+    static int idx(int row, int col, int ld) { return col * ld + row; }
+
+    static void matvec(const std::vector<FloatT>& mat,
+                       const FloatT* psi_in,
+                       FloatT* out,
+                       int npw,
+                       int ld_psi,
+                       int nvec)
+    {
+        const int ld = npw;
+        for (int iv = 0; iv < nvec; iv++)
+        {
+            for (int i = 0; i < npw; i++)
+            {
+                FloatT sum = {0.0f, 0.0f};
+                for (int j = 0; j < npw; j++)
+                    sum += mat[idx(i, j, ld)] * psi_in[iv * ld_psi + j];
+                out[iv * ld_psi + i] = sum;
+            }
+            for (int i = npw; i < ld_psi; i++)
+                out[iv * ld_psi + i] = {123.0f, -456.0f};
+        }
+    }
+
+    static void build_generalized_problem(int npw,
+                                          std::vector<FloatT>& hmat,
+                                          std::vector<FloatT>& smat,
+                                          std::vector<FloatReal>& prec,
+                                          std::vector<FloatReal>& e_ref)
+    {
+        hmat.assign(npw * npw, {0.0f, 0.0f});
+        smat.assign(npw * npw, {0.0f, 0.0f});
+
+        for (int i = 0; i < npw; i++)
+        {
+            const FloatReal hdiag = static_cast<FloatReal>(5.0f * (i + 1) * (i + 1));
+            const FloatReal sdiag = static_cast<FloatReal>(1.2f + 0.01f * (i % 3));
+            hmat[idx(i, i, npw)] = FloatT(hdiag, 0.0f);
+            smat[idx(i, i, npw)] = FloatT(sdiag, 0.0f);
+        }
+
+        auto hcopy = hmat;
+        auto scopy = smat;
+        e_ref.resize(npw);
+        ASSERT_EQ(lapackGeneralizedEigenFloat(npw, hcopy, scopy, e_ref.data()), 0);
+
+        prec.resize(npw);
+        for (int i = 0; i < npw; i++)
+            prec[i] = std::max(1.0f, std::real(hmat[idx(i, i, npw)]));
+    }
+};
+
 // ============================================================================
 // Test cases: various matrix sizes and band counts
 // ============================================================================
@@ -553,6 +638,73 @@ TEST_F(DiagoLobpcgTest, GeneralizedModerateCouplingOverlap)
     run_generalized_and_validate(npw, nband, npw + 5,
                                  2.0, 0.05, 29, 0.5,
                                  2e-5, 2e-7, 2e-4);
+}
+
+TEST_F(DiagoLobpcgFloatTest, GeneralizedUsppLikeOverlapFloat)
+{
+    const int npw = 16;
+    const int nband = 4;
+    const int ld_psi = npw + 4;
+    std::vector<FloatT> hmat, smat;
+    std::vector<FloatReal> prec, e_ref;
+    build_generalized_problem(npw, hmat, smat, prec, e_ref);
+
+    std::vector<FloatT> psi(nband * ld_psi, {0.0f, 0.0f});
+    for (int ib = 0; ib < nband; ib++)
+    {
+        psi[ib * ld_psi + ib] = {1.0f, 0.0f};
+        for (int ig = npw; ig < ld_psi; ig++)
+            psi[ib * ld_psi + ig] = {99.0f, -77.0f};
+    }
+
+    auto hpsi_func = [&](FloatT* psi_in, FloatT* hpsi_out,
+                          int ld_in, int nvec) {
+        matvec(hmat, psi_in, hpsi_out, npw, ld_in, nvec);
+    };
+    auto spsi_func = [&](const FloatT* psi_in, FloatT* spsi_out,
+                          int ld_in, int nvec) {
+        matvec(smat, psi_in, spsi_out, npw, ld_in, nvec);
+    };
+
+    std::vector<FloatReal> eigens(nband, 0.0f);
+    std::vector<double> ethr(nband, 1e-2);
+    const int old_scf = hsolver::DiagoIterAssist<FloatT, TestDevice>::SCF_ITER;
+    hsolver::DiagoIterAssist<FloatT, TestDevice>::SCF_ITER = 1;
+
+    hsolver::DiagoLobpcg<FloatT, TestDevice> lobpcg(prec.data());
+    lobpcg.init_iter(nband, nband, ld_psi, npw);
+    lobpcg.set_nline(10);
+    lobpcg.set_max_iter(80);
+    lobpcg.diag(hpsi_func, spsi_func, psi.data(), eigens.data(), ethr);
+
+    hsolver::DiagoIterAssist<FloatT, TestDevice>::SCF_ITER = old_scf;
+
+    for (int ib = 0; ib < nband; ib++)
+        ASSERT_NEAR(eigens[ib], e_ref[ib], 1e-3);
+
+    std::vector<FloatT> hpsi(nband * ld_psi), spsi(nband * ld_psi);
+    matvec(hmat, psi.data(), hpsi.data(), npw, ld_psi, nband);
+    matvec(smat, psi.data(), spsi.data(), npw, ld_psi, nband);
+    for (int i = 0; i < nband; i++)
+    {
+        for (int ig = npw; ig < ld_psi; ig++)
+            EXPECT_EQ(psi[i * ld_psi + ig], FloatT(0.0f, 0.0f));
+
+        for (int j = 0; j < nband; j++)
+        {
+            FloatT dot = {0.0f, 0.0f};
+            for (int ig = 0; ig < npw; ig++)
+                dot += std::conj(psi[i * ld_psi + ig]) * spsi[j * ld_psi + ig];
+            EXPECT_NEAR(
+                std::abs(dot - (i == j ? FloatT(1.0f, 0.0f) : FloatT(0.0f, 0.0f))),
+                0.0f, 1e-4);
+        }
+
+        FloatReal res2 = 0.0f;
+        for (int ig = 0; ig < npw; ig++)
+            res2 += std::norm(hpsi[i * ld_psi + ig] - eigens[i] * spsi[i * ld_psi + ig]);
+        EXPECT_LT(std::sqrt(res2), 1e-2);
+    }
 }
 
 #ifdef __MPI

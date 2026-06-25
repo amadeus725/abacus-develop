@@ -42,7 +42,8 @@ void run_bpcg_pw(const HPsiFunc& hpsi_func,
 }
 
 template <typename T, typename Device, typename HPsiFunc, typename SPsiFunc>
-typename std::enable_if<std::is_same<T, std::complex<double>>::value
+typename std::enable_if<(std::is_same<T, std::complex<float>>::value
+                             || std::is_same<T, std::complex<double>>::value)
                             && std::is_same<Device, base_device::DEVICE_CPU>::value,
                         int>::type
 run_lobpcg_pw(const HPsiFunc& hpsi_func,
@@ -76,7 +77,8 @@ run_lobpcg_pw(const HPsiFunc& hpsi_func,
 }
 
 template <typename T, typename Device, typename HPsiFunc, typename SPsiFunc>
-typename std::enable_if<!std::is_same<T, std::complex<double>>::value
+typename std::enable_if<!(std::is_same<T, std::complex<float>>::value
+                             || std::is_same<T, std::complex<double>>::value)
                             || !std::is_same<Device, base_device::DEVICE_CPU>::value,
                         int>::type
 run_lobpcg_pw(const HPsiFunc&,
@@ -90,7 +92,7 @@ run_lobpcg_pw(const HPsiFunc&,
               const int)
 {
     ModuleBase::WARNING_QUIT("HSolverPW",
-        "LOBPCG is currently implemented only for CPU complex<double> PW calculations.");
+        "LOBPCG is currently implemented only for CPU complex<float>/complex<double> PW calculations.");
     return 0;
 }
 
