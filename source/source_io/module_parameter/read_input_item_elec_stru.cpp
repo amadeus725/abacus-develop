@@ -56,7 +56,7 @@ For plane-wave basis,
 * bpcg: The BPCG method, which is a block-parallel Conjugate Gradient (CG) method, typically exhibits higher acceleration in a GPU environment.
 * dav: The Davidson algorithm.
 * dav_subspace: The Davidson algorithm without orthogonalization operation, this method is the most recommended for efficiency. `pw_diag_ndim` can be set to 2 for this method.
-* lobpcg: The experimental Locally Optimal Block Preconditioned Conjugate Gradient method for CPU PW `std::complex<double>` USPP/generalized-overlap calculations. Non-USPP PW requests fall back to the existing BPCG solver. GPU and float calculations are not supported yet.
+* lobpcg: The experimental Locally Optimal Block Preconditioned Conjugate Gradient method for CPU PW `std::complex<float>`/`std::complex<double>` USPP/generalized-overlap calculations. Non-USPP PW requests fall back to the existing BPCG solver. GPU is not supported yet.
 
 For numerical atomic orbitals basis,
 
@@ -158,13 +158,6 @@ Then the user has to correct the input file and restart the calculation.)";
                         ModuleBase::WARNING_QUIT("ReadInput",
                                                  "ks_solver=lobpcg is currently implemented only for CPU PW "
                                                  "calculations. Please set device=cpu or choose another PW solver.");
-                    }
-                    if (para.input.precision == "single")
-                    {
-                        ModuleBase::WARNING_QUIT("ReadInput",
-                                                 "ks_solver=lobpcg is currently implemented only for double-precision "
-                                                 "PW calculations. Please set precision=double or choose another PW "
-                                                 "solver.");
                     }
                 }
             }

@@ -24,10 +24,11 @@ static void lobpcg_reduce_sum(int& value)
 #endif
 }
 
-static void lobpcg_reduce_max(double& value)
+template <typename Real>
+static void lobpcg_reduce_max(Real& value)
 {
 #ifdef __MPI
-    MPI_Allreduce(MPI_IN_PLACE, &value, 1, MPI_DOUBLE, MPI_MAX, BP_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, &value, 1, Parallel_Reduce::MPI_Type<Real>::value, MPI_MAX, BP_WORLD);
 #endif
 }
 
@@ -47,6 +48,13 @@ static void lobpcg_reduce_bool_and(bool& value)
     MPI_Allreduce(MPI_IN_PLACE, &reduced, 1, MPI_INT, MPI_LAND, BP_WORLD);
     value = (reduced != 0);
 #endif
+}
+
+template <typename Real>
+static Real residual_guard_floor()
+{
+    return std::max(static_cast<Real>(1.0e-12),
+                    static_cast<Real>(100.0) * std::numeric_limits<Real>::epsilon());
 }
 
 template <typename T>
@@ -250,7 +258,7 @@ bool DiagoLobpcg<T, Device>::update_best_state(State& state,
     }
     bool better = !quality.valid || candidate_notconv < quality.notconv;
     if (quality.valid && candidate_notconv == quality.notconv) {
-        const Real best_tol = std::max(static_cast<Real>(1.0e-12),
+        const Real best_tol = std::max(detail::residual_guard_floor<Real>(),
                                        std::abs(quality.residual) * static_cast<Real>(1.0e-8));
         better = candidate_residual < quality.residual - best_tol;
     }
@@ -349,7 +357,7 @@ int DiagoLobpcg<T, Device>::run_lobpcg_loop(
             notconv_after_update = this->count_not_converged(this->err_st, effective_ethr_band);
         }
         const Real residual_growth_limit = static_cast<Real>(10.0);
-        const Real residual_limit = std::max(static_cast<Real>(1.0e-8),
+        const Real residual_limit = std::max(detail::residual_guard_floor<Real>(),
                                              residual_before_update * residual_growth_limit);
         update_rejected = !std::isfinite(residual_after_update)
             || (residual_after_update > residual_limit
@@ -401,7 +409,7 @@ int DiagoLobpcg<T, Device>::run_lobpcg_loop(
     compute_residual();
     Real final_residual = this->max_error(this->err_st);
     int final_notconv = this->count_not_converged(this->err_st, effective_ethr_band);
-    const Real best_restore_tol = std::max(static_cast<Real>(1.0e-12),
+    const Real best_restore_tol = std::max(detail::residual_guard_floor<Real>(),
                                            std::abs(best_quality.residual) * static_cast<Real>(1.0e-8));
     const bool should_restore_best =
         best_quality.valid
@@ -453,7 +461,7 @@ bool DiagoLobpcg<T, Device>::handle_generalized_rejected_update(
                                      this->prec, this->grad, this->err_st);
             guarded_residual = this->max_error(this->err_st);
             const int guarded_notconv = this->count_not_converged(this->err_st, effective_ethr_band);
-            const Real guarded_limit = std::max(static_cast<Real>(1.0e-8),
+            const Real guarded_limit = std::max(detail::residual_guard_floor<Real>(),
                                                 residual_before_update * residual_growth_limit);
             compressed_ok = std::isfinite(guarded_residual)
                 && (guarded_residual <= guarded_limit || guarded_notconv < notconv_before_update);
@@ -1600,6 +1608,7 @@ int DiagoLobpcg<T, Device>::diag(
     return used_iter;
 }
 
+template class DiagoLobpcg<std::complex<float>, base_device::DEVICE_CPU>;
 template class DiagoLobpcg<std::complex<double>, base_device::DEVICE_CPU>;
 
 } // namespace hsolver
